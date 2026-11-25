@@ -1,232 +1,126 @@
-# ITU-CS-464-LAB-07-BSSE23013
+# ITU-CS-464-LAB-08-BSSE23013
 
-**CS464 Game Development, Lab 07 (UI/UX)**
+**CS464 Game Development, Lab 08 (Audio, Loading, Events)**
 Muhammad Sarmad Ahmad, BSSE23013
 
-ROLL RUSH is a small mobile ball game. For this lab I only built its menu system: ten connected screens in **one scene and one Canvas**. The actual level is not part of the lab, so the Game screen is a stand-in with a Pause button and two buttons that end the level (win or fail). The inspiration was taken from "Smash Hit" that I used to play for time pass or as in achiever in past.
+This lab is built on top of my Lab 07 project, ROLL RUSH. The ten menu screens and their tweens from Lab 07 still work as before. What is new is a real (small) level, an async loading screen in front of it, sound everywhere, a proper Audio Mixer with working volume settings, and a C# event system that ties the gameplay to the HUD and the audio.
 
-- **Demo video:** https://drive.google.com/file/d/1nSqOYAJ2srfknmyWP-u9usq9yGPwufjx/view?usp=sharing
-
+- **Demo video:** https://drive.google.com/file/d/1BswE24Fq6tec0HX-fgtV3u-AfJRqAOSw/view?usp=sharing
+- **Audio Mixer screenshot:** `Screenshots/audio-mixer.png`
+- **Unity version:** 6000.3.24f1 (URP, Input System, TextMeshPro)
 
 ## How to run
 
-1. Clone the repo and open the folder in Unity Hub with Unity **6000.3.24f1**.
-2. Open `Assets/Scenes/MenuSystem.unity`.
-3. In the Game view choose a portrait ratio (Phone 9:16) and press Play. The mouse acts as touch.
-
-A ready-to-run Windows build (`.exe`) is in the `Build/` folder (Link to Build Folder ([Drive Link to Folder](https://drive.google.com/file/d/1_CjPwVbqG6IqGiiQMPe-RovQivwPY8FG/view?usp=sharing))). It opens as a portrait window that keeps its ratio.
+1. Clone the repo and open the folder in Unity Hub with Unity **6000.3.24f1**. The first import takes a while.
+2. Open `Assets/Scenes/MenuSystem.unity` and press Play (Game view set to a portrait ratio).
+3. Flow: Title, Main Menu, Play, pick a level, Start. The loading screen appears, then the level.
 
 
-## Design choices used on every screen
+Keys in the level: WASD or arrow keys to move, Esc to pause. On a touch screen you drag.
 
-- **Colours (60-30-10):** deep indigo background (#0F1230 / #1A1F52) for about 60%, lighter indigo panels and secondary buttons (#252B6B / #343C94) for about 30%, and orange (#FF8A1F) for about 10%, only on the main action of a screen. Green and gold are used for rewards, red for danger or failure.
-- **Text:** TextMeshPro. Lilita One for titles and Poppins for everything else. Light text on the dark background has very high contrast, and dark text on orange is about 7.8:1 (WCAG AA needs 4.5:1).
-- **Touch targets:** every button is at least 120 px tall on the 1080 x 1920 reference screen (about 44 pt).
-- **Scaling:** Canvas Scaler is *Scale With Screen Size* (1080 x 1920, match 0.5) and elements are anchored, so it keeps its shape on different phones.
+## Loading flow
 
-## The ten screens
 
-The numbers in each list match the numbered pink circles on the colour screenshot.
 
-### 1. Title
+1. START shows the Loading screen.
+2. `allowSceneActivation` is set to `false`, so Unity loads the scene data but does not switch it on.
+3. The bar follows `op.progress / 0.9` (Unity stops at 0.9 while activation is blocked). The bar moves smoothly towards the real value and the screen stays for at least a short minimum time so it does not flash.
+4. Only when the bar is full does the code set `allowSceneActivation = true`, wait for `isDone`, show the HUD and call `GameManager.Begin()`. The player cannot move before that.
+5. Replay and Next Level unload the old Gameplay scene first and run the same routine again. Quit to Menu unloads it.
 
-**Purpose:** First screen. Shows the game name and asks the player to tap.
+## Audio Mixer
 
-**Principles:** Hierarchy: the logo is the biggest thing and the only orange accent. One call to action (the whole screen is the touch target).
+One mixer, `Assets/Lab08/Audio/GameMixer.mixer`:
 
-**Tweens / ease:** The pulsing text is a sine-wave scale; the screen itself slides in.
+| Group | Parent | Exposed parameter | What goes through it |
+|---|---|---|---|
+| Master | none | `MasterVolume` | everything |
+| Music | Master | `MusicVolume` | the two music sources |
+| SFX | Master | `SfxVolume` | the four gameplay SFX sources |
+| UI | Master | `UiVolume` | the two UI sound sources |
 
-| Colour (annotated) | Greyscale |
+Every AudioSource in the project has its output set to one of these groups. There is no AudioSource on the buttons; all UI sounds go through one reusable `UIAudio` object (`UIAudio.Play(UISound.Click)`).
+
+**Sounds.** UI: hover, press, back, open, close, pause, resume, success, error. Gameplay: coin, heal, hurt, boost, win, lose. Music: menu, game, results. The SFX player uses `PlayOneShot` on a round-robin set of sources with a random pitch (about plus or minus two semitones) and a small volume change, so repeated coins do not sound identical.
+
+## Volume mapping
+
+The sliders in Settings go from 0 to 1, but the mixer works in decibels, so `VolumeSettings.ToDecibels` does:
+
+```csharp
+Mathf.Log10(Mathf.Clamp(slider, 0.0001f, 1f)) * 20f
+```
+
+1.0 is 0 dB, 0.5 is about -6 dB, and the minimum 0.0001 is exactly -80 dB (silent). The clamp is there because `Log10(0)` is minus infinity.
+
+- **Persistence:** each slider is saved in PlayerPrefs (`Lab08.MasterVolume` and so on) and applied in `Start`, so the saved values come back on the next launch.
+- **Mute:** the Mute all toggle is stored separately (`Lab08.Muted`). It pushes Master to -80 dB but never touches the saved slider values, so unmuting brings back exactly what the player had.
+- **Pause:** pausing sets `Time.timeScale = 0` and `AudioListener.pause = true`, which stops gameplay sounds. The music and UI sources have `ignoreListenerPause` turned on, so the music keeps playing (ducked down to about a third) and the pause menu buttons still make sound. Resume and returning to the menu restore everything.
+
+## Music transitions
+
+`MusicPlayer` has two AudioSources and crossfades between them with an equal-power curve (cos / sin) over 1.5 seconds, on unscaled time so it also works while paused. `MusicController` listens to the game events and decides the track:
+
+| Event | Music |
 |---|---|
-| ![Title](Screenshots/01-title-annotated.png) | ![Title greyscale](Screenshots/01-title-greyscale.png) |
-
-1. Logo: biggest element, white and orange.
-2. Ball: a simple visual that says what the game is about.
-3. TAP TO START pulses so the player knows what to do.
-
-**Greyscale check:** Logo and prompt keep the same contrast in grey, so nothing needed changing.
-
-### 2. Main Menu
-
-**Purpose:** The hub that leads to everything else.
-
-**Principles:** Ranking by size and colour: PLAY > SHOP > Settings/Credits. The coin count sits in the corner where players expect it.
-
-**Tweens / ease:** Slides in from the right with the ease-in-out curve (`slideCurve`) while fading in.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Main Menu](Screenshots/02-main-menu-annotated.png) | ![Main Menu greyscale](Screenshots/02-main-menu-greyscale.png) |
-
-1. Coin counter in the top corner, always visible.
-2. Ball preview and a short tip line (Settings can hide the tip).
-3. PLAY: biggest, the only orange button.
-4. SHOP: wide but blue, so it clearly comes second.
-5. Settings and Credits are small because they are used rarely.
-
-**Greyscale check:** PLAY is still the lightest button in grey, SHOP is mid-grey and the bottom row is darkest, so the order of importance survives without colour.
-
-### 3. Levels
-
-**Purpose:** Pick a level to play.
-
-**Principles:** Repetition: every level is the same row. State is shown by more than colour: locked levels get a lock icon and the word LOCKED.
-
-**Tweens / ease:** Slides in from the right with the ease-in-out curve (`slideCurve`) while fading in.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Levels](Screenshots/03-levels-annotated.png) | ![Levels greyscale](Screenshots/03-levels-greyscale.png) |
-
-1. Back button, same place on every screen.
-2. Unlocked level: bright number badge and a lighter row.
-3. Locked level: dark row, lock icon and the word LOCKED.
-
-**Greyscale check:** Locked rows were too close to the open ones, so I added the lock icon and the LOCKED label. In grey the badges and rows now clearly differ.
-
-### 4. Loadout
-
-**Purpose:** Choose a ball skin before starting.
-
-**Principles:** Live preview (the player sees the result big). The selected skin is shown by a frame, not only by colour. START is the only orange button.
-
-**Tweens / ease:** Slides in from the right with the ease-in-out curve (`slideCurve`) while fading in.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Loadout](Screenshots/04-loadout-annotated.png) | ![Loadout greyscale](Screenshots/04-loadout-greyscale.png) |
-
-1. Large preview with the skin name below it.
-2. Selected skin has a bright frame around it.
-3. START: the main action, at the bottom where the thumb is.
-
-**Greyscale check:** The teal and gold skins turned into almost the same grey, so the four skins have different patterns (plain, stripes, dots, star) and the name is written under the preview.
-
-### 5. Game (stand-in)
-
-**Purpose:** Placeholder for the real level. It lets me test the full flow.
-
-**Principles:** Thumb-zone layout: buttons at the bottom. FINISH LEVEL is orange, FAIL LEVEL is blue, so there is a clear main choice.
-
-**Tweens / ease:** Pops in (grows from 85% with a small overshoot, `popCurve`) because it opens on top of the game instead of beside it.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Game (stand-in)](Screenshots/05-game-annotated.png) | ![Game (stand-in) greyscale](Screenshots/05-game-greyscale.png) |
-
-1. Area where the level would run.
-2. FINISH LEVEL ends the level as a win (FAIL LEVEL, below it, ends it as a loss).
-3. Pause button opens the Pause screen.
-
-**Greyscale check:** FINISH (light grey) and FAIL (darker grey) are different, and both have an icon and words.
-
-### 6. Pause
-
-**Purpose:** Stops the game without leaving it.
-
-**Principles:** Dimmed background keeps the game visible behind it. Resume is orange and Quit is red with an icon and words, and they are far apart so they are not pressed by mistake.
-
-**Tweens / ease:** Pops in (grows from 85% with a small overshoot, `popCurve`) because it opens on top of the game instead of beside it.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Pause](Screenshots/06-pause-annotated.png) | ![Pause greyscale](Screenshots/06-pause-greyscale.png) |
-
-1. Resume: orange, the main action.
-2. Quit: red, with a different icon.
-3. Dimmed game behind the panel.
-
-**Greyscale check:** Resume and Quit are different greys and each has its own label.
-
-### 7. Results
-
-**Purpose:** Shows the result of the level and what to do next. The first screenshot is a win, the second a fail.
-
-**Principles:** The banner colour, the trophy and the title text all say win or fail, so colour is not the only signal. Stars and Next Level only appear after a win.
-
-**Tweens / ease:** Pops in (grows from 85% with a small overshoot, `popCurve`) because it opens on top of the game instead of beside it.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Results win](Screenshots/07-results-win-annotated.png) | ![Results win greyscale](Screenshots/07-results-win-greyscale.png) |
-| ![Results fail](Screenshots/07-results-lose-annotated.png) | ![Results fail greyscale](Screenshots/07-results-lose-greyscale.png) |
-
-1. Banner: gold for a win, red for a fail.
-2. Stars (win only).
-3. NEXT LEVEL: the main action, orange.
-
-Fail screenshot: (1) red banner, (2) RETRY is the main action here, because there is no Next Level after a fail.
-
-**Greyscale check:** The win banner is light grey and the fail banner mid-grey, and the title text says which one it is.
-
-### 8. Shop
-
-**Purpose:** Spend coins on three boosts.
-
-**Principles:** Same row for every item. The coin balance is always visible. After buying, the button text changes to OWNED.
-
-**Tweens / ease:** Slides in from the right with the ease-in-out curve (`slideCurve`) while fading in.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Shop](Screenshots/08-shop-annotated.png) | ![Shop greyscale](Screenshots/08-shop-greyscale.png) |
-
-1. Coin balance (shared with the Main Menu).
-2. BUY button with the price written on it.
-3. Message line: says what happened (bought, or not enough coins).
-
-**Greyscale check:** BUY buttons keep the word and price, so they read the same in grey.
-
-### 9. Settings
-
-**Purpose:** Vibration, tips and brightness.
-
-**Principles:** Same row pattern for every setting (icon + label left, control right). Switches are tick boxes with a check mark, so on/off is not only colour. The slider handle is large.
-
-**Tweens / ease:** Slides in from the right with the ease-in-out curve (`slideCurve`) while fading in.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Settings](Screenshots/09-settings-annotated.png) | ![Settings greyscale](Screenshots/09-settings-greyscale.png) |
-
-1. Tick box: the check mark shows on/off.
-2. Brightness slider with a big handle.
-3. Every row follows the same layout.
-
-**Greyscale check:** The check mark is still clear in grey, so the switches work without colour.
-
-### 10. Credits
-
-**Purpose:** Who made the game and what was used.
-
-**Principles:** Typographic hierarchy: small coloured headings and white names, centred, with one back button.
-
-**Tweens / ease:** Slides in from the right with the ease-in-out curve (`slideCurve`) while fading in.
-
-| Colour (annotated) | Greyscale |
-|---|---|
-| ![Credits](Screenshots/10-credits-annotated.png) | ![Credits greyscale](Screenshots/10-credits-greyscale.png) |
-
-1. Section heading in gold.
-2. Name and roll number.
-3. Fonts and art credits.
-
-**Greyscale check:** Headings and names end up almost the same grey, so the headings are separated by size, capital letters and spacing, not only by their gold colour.
-
-## Code
-
-Six small scripts in `Assets/Lab07/Scripts`:
-
-- `UIManager`: shows one screen at a time and plays the slide / pop tweens. Every button calls one of its public methods from the Button's OnClick list.
-- `Shop`: coins and the three Buy buttons.
-- `SkinPicker`: changes the preview and moves the selection frame.
-- `SettingsMenu`: vibration, tips and brightness.
-- `ButtonPress`: the 94% press feedback.
-- `Pulse`: the pulsing text on the Title screen.
-
-## Credits and references
-
-- Lecture 08, UI and UX in Games (CS464)
-- W3C, *Web Content Accessibility Guidelines (WCAG) 2*, contrast ratio.
-- Fonts: Lilita One and Poppins, SIL Open Font License (`Assets/Lab07/Licenses`).
-- Game inspirations: Smash Hit
+| `MenuShown` | menu loop |
+| `GameStarted` | game loop |
+| `GameWon` / `GameLost` | results loop |
+
+The music loops are made seamless (the tail of each loop wraps into its start).
+
+## Events: publishers and subscribers
+
+| Event | Publisher | Subscribers |
+|---|---|---|
+| `Health.Damaged` (instance) | `Health` | `HurtSound`, `HitSparks`, `ShakeOnHit` |
+| `GameEvents.PlayerDamaged` / `PlayerHealed` | `Health` | `HealthBarListener`, `HitFlash` |
+| `GameEvents.CoinCollected` | `GameManager` | `CoinCounter` |
+| `Pickup.Collected` (static) | `Pickup` | `PickupFeedback` (sound + sparkle) |
+| `GameEvents.BoostStarted` | `Pickup` | `BoostTrail` |
+| `GameEvents.GameStarted` / `MenuShown` | `GameManager`, `UIManager` | `MusicController` |
+| `GameEvents.GameWon` / `GameLost` | `GameManager` | `ResultSounds`, `MusicController`, `UIManager` |
+
+`Health.Damaged` alone has three independent listeners, and none of them knows about the others. A static event can only be invoked from the class that declares it, so `GameEvents` has small `Raise...` methods the publishers call.
+
+Declaration and invocation (`Health.cs`, `GameEvents.cs`):
+
+```csharp
+public event Action<int, int> Damaged;
+
+Damaged?.Invoke(Current, maxHealth);
+GameEvents.RaisePlayerDamaged(Current, maxHealth);
+```
+
+Subscribe and unsubscribe (`HitSparks.cs`):
+
+```csharp
+void OnEnable()  { health.Damaged += OnDamaged; }
+void OnDisable() { health.Damaged -= OnDamaged; }
+
+void OnDamaged(int current, int max) { sparks.Emit(24); }
+```
+
+Every listener subscribes in `OnEnable` and unsubscribes in `OnDisable`. This matters most for the static events, because they outlive the Gameplay scene and a destroyed listener left on the list would throw errors after a replay.
+
+## Project structure
+
+```
+Assets/
+  Lab07/          menu system from Lab 07 (UI scripts, builder, sprites), with sound hooks added
+  Lab08/
+    Audio/        GameMixer.mixer + UI / SFX / Music clips
+    Scripts/      events, audio players, volume settings, loading, gameplay
+    Editor/       Lab08 > Build Everything, audio import settings
+  Scenes/         MenuSystem.unity, Gameplay.unity
+Tools/
+  make_audio.py   generates every sound in Assets/Lab08/Audio
+  make_sprites.py generates the Lab 07 sprites
+```
+
+## Asset credits
+
+- **All audio** (9 UI sounds, 6 SFX, 3 music loops) was made by me using AI with a small Python/NumPy script, `Tools/make_audio.py`. No third-party audio is used, so there is nothing to attribute.
+- **Fonts:** Lilita One and Poppins (SIL Open Font License), see `Assets/Lab07/Licenses`.
+- **Sprites:** drawn by script (`Tools/make_sprites.py`).
+- Lecture 08, 09 and 10 slides were the reference for the colour/UI work, the audio setup and the sound design.

@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using TMPro;
+using UnityEditor;
 using UnityEditor.Events;
 using UnityEngine;
+using UnityEngine.Audio;
 using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -14,6 +16,8 @@ public static class MenuBuilder
     static Shop shop;
     static SkinPicker picker;
     static SettingsMenu settings;
+    static SceneLoader loader;
+    static VolumeSettings volume;
     static List<TMP_Text> levelLabels = new List<TMP_Text>();
     static List<TMP_Text> coinTexts = new List<TMP_Text>();
 
@@ -131,6 +135,75 @@ public static class MenuBuilder
 
     static RectTransform RT(Component c) { return (RectTransform)c.transform; }
 
+    // ------------------------------------------------------------ Lab 08 helpers
+    const string AudioDir = "Assets/Lab08/Audio/";
+
+    static AudioClip Clip(string path)
+    {
+        AudioClip c = AssetDatabase.LoadAssetAtPath<AudioClip>(AudioDir + path);
+        if (c == null) Debug.LogError("[Lab08] Missing audio clip " + path);
+        return c;
+    }
+
+    static AudioSource NewSource(Transform parent, string name, AudioMixerGroup group)
+    {
+        GameObject go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        AudioSource s = go.AddComponent<AudioSource>();
+        s.playOnAwake = false;
+        s.spatialBlend = 0f;                 // 2D
+        s.outputAudioMixerGroup = group;     // every source goes to a mixer group
+        return s;
+    }
+
+    static AudioSource[] NewSources(Transform parent, string name, AudioMixerGroup group, int count)
+    {
+        AudioSource[] list = new AudioSource[count];
+        for (int i = 0; i < count; i++) list[i] = NewSource(parent, name + (i + 1), group);
+        return list;
+    }
+
+    // One "Audio" object with the four reusable audio scripts and all the AudioSources.
+    static void BuildAudio(Transform parent)
+    {
+        AudioMixer mixer = AssetDatabase.LoadAssetAtPath<AudioMixer>(AudioDir + "GameMixer.mixer");
+        AudioMixerGroup music = mixer.FindMatchingGroups("Master/Music")[0];
+        AudioMixerGroup sfx = mixer.FindMatchingGroups("Master/SFX")[0];
+        AudioMixerGroup uiGroup = mixer.FindMatchingGroups("Master/UI")[0];
+
+        GameObject audio = new GameObject("Audio");
+
+        UIAudio ua = audio.AddComponent<UIAudio>();
+        ua.sources = NewSources(audio.transform, "UiSource", uiGroup, 2);
+        ua.hover = Clip("UI/ui_hover.wav");
+        ua.click = Clip("UI/ui_click.wav");
+        ua.back = Clip("UI/ui_back.wav");
+        ua.open = Clip("UI/ui_open.wav");
+        ua.close = Clip("UI/ui_close.wav");
+        ua.pause = Clip("UI/ui_pause.wav");
+        ua.resume = Clip("UI/ui_resume.wav");
+        ua.success = Clip("UI/ui_success.wav");
+        ua.error = Clip("UI/ui_error.wav");
+
+        SfxPlayer sp = audio.AddComponent<SfxPlayer>();
+        sp.sources = NewSources(audio.transform, "SfxSource", sfx, 4);
+
+        MusicPlayer mp = audio.AddComponent<MusicPlayer>();
+        mp.sources = NewSources(audio.transform, "MusicSource", music, 2);
+
+        MusicController mc = audio.AddComponent<MusicController>();
+        mc.menuMusic = Clip("Music/music_menu.ogg");
+        mc.gameMusic = Clip("Music/music_game.ogg");
+        mc.resultsMusic = Clip("Music/music_results.ogg");
+
+        ResultSounds rs = audio.AddComponent<ResultSounds>();
+        rs.winSound = Clip("SFX/sfx_win.wav");
+        rs.loseSound = Clip("SFX/sfx_lose.wav");
+
+        volume = audio.AddComponent<VolumeSettings>();
+        volume.mixer = mixer;
+    }
+
     // wire a button to UIManager.Show(index) or to any method, the same as filling the OnClick list by hand
     static void Go(Button b, int index) { UnityEventTools.AddIntPersistentListener(b.onClick, ui.Show, index); }
     static void Call(Button b, UnityAction action) { UnityEventTools.AddPersistentListener(b.onClick, action); }
@@ -148,6 +221,7 @@ public static class MenuBuilder
     {
         Button back = MakeButton(panel, "BackButton", 132f, 132f, Palette.PanelHi, null, 0, Palette.Text, "icon_back", Art.Bold, "circle");
         Corner(RT(back), true, 60f, 70f, 132f, 132f);
+        back.GetComponent<ButtonPress>().pressSound = UISound.Back;
         Go(back, backIndex);
         TMP_Text t = NewText("Title", panel, title, 88, Palette.Text, Art.Display);
         Top(t.rectTransform, 0f, 136f, 640f, 120f);
@@ -180,15 +254,17 @@ public static class MenuBuilder
         scaler.matchWidthOrHeight = 0.5f;
         RectTransform root = (RectTransform)canvasGo.transform;
 
-        // background: dark colour + a few soft circles
-        Image bg = NewImage("Background", root, null, Palette.BgDeep); Fill(bg.rectTransform);
-        Image glow = NewImage("Glow", root, "fade_v", Palette.BgMid); Fill(glow.rectTransform);
+        // background: dark colour + a few soft circles (in one object, so it can be hidden while playing)
+        RectTransform backdrop = NewRect("Backdrop", root);
+        Fill(backdrop);
+        Image bg = NewImage("Background", backdrop, null, Palette.BgDeep); Fill(bg.rectTransform);
+        Image glow = NewImage("Glow", backdrop, "fade_v", Palette.BgMid); Fill(glow.rectTransform);
         float[] xs = { -420f, 440f, -300f, 380f };
         float[] ys = { 700f, 380f, -520f, -760f };
         float[] sizes = { 700f, 520f, 640f, 460f };
         for (int i = 0; i < 4; i++)
         {
-            Image c = NewImage("Circle" + i, root, "circle", new Color(0.2f, 0.24f, 0.58f, 0.26f));
+            Image c = NewImage("Circle" + i, backdrop, "circle", new Color(0.2f, 0.24f, 0.58f, 0.26f));
             Mid(c.rectTransform, xs[i], ys[i], sizes[i], sizes[i]);
         }
 
@@ -197,14 +273,19 @@ public static class MenuBuilder
         shop = mgr.AddComponent<Shop>();
         picker = mgr.AddComponent<SkinPicker>();
         settings = mgr.AddComponent<SettingsMenu>();
+        loader = mgr.AddComponent<SceneLoader>();
         ui.shop = shop;
+        ui.loader = loader;
+        ui.backdrop = backdrop.gameObject;
+        loader.ui = ui;
+        BuildAudio(root);
 
         RectTransform screens = NewRect("Screens", root);
         Fill(screens);
         ui.panels = new GameObject[]
         {
             BuildTitle(screens), BuildMain(screens), BuildLevels(screens), BuildLoadout(screens), BuildGame(screens),
-            BuildResults(screens), BuildShop(screens), BuildSettings(screens), BuildCredits(screens)
+            BuildResults(screens), BuildShop(screens), BuildSettings(screens), BuildCredits(screens), BuildLoading(screens)
         };
         ui.pausePanel = BuildPause(screens);
 
@@ -246,7 +327,7 @@ public static class MenuBuilder
         TMP_Text tapText = NewText("TapToStart", p, "TAP TO START", 56, Palette.Text, Art.Bold);
         Bottom(tapText.rectTransform, 0f, 340f, 800f, 90f);
         tapText.gameObject.AddComponent<Pulse>();
-        TMP_Text foot = NewText("Footer", p, "CS464  ·  LAB 07", 32, Palette.Muted, Art.Body);
+        TMP_Text foot = NewText("Footer", p, "CS464  ·  LAB 08", 32, Palette.Muted, Art.Body);
         Bottom(foot.rectTransform, 0f, 120f, 800f, 60f);
         return p.gameObject;
     }
@@ -376,37 +457,59 @@ public static class MenuBuilder
         picker.tiles = tiles;
         picker.colors = colors;
         picker.names = names;
+        picker.patterns = new string[] { "", "ball_stripe", "ball_dots", "ball_star" };
 
         Button start = MakeButton(p, "StartButton", 900f, 170f, Palette.Accent, "START", 80, Palette.BgDeep, "icon_play", Art.Display);
         Bottom(RT(start), 0f, 200f, 900f, 170f);
-        Go(start, 4);
+        Call(start, ui.StartGame);
         return p.gameObject;
     }
 
-    // ------------------------------------------------------------ 5 Game (stand-in)
+    // ------------------------------------------------------------ 5 Game (HUD over the Gameplay scene)
     static GameObject BuildGame(Transform parent)
     {
         RectTransform p = Panel(parent, "Screen_05_Game");
-        TMP_Text level = NewText("Level", p, "LEVEL 1", 48, Palette.Muted, Art.Bold);
-        Top(level.rectTransform, 0f, 250f, 900f, 64f);
+
+        // red flash over the whole screen when the player is hit (never blocks a tap)
+        Image flash = NewImage("HitFlash", p, null, new Color(0.94f, 0.27f, 0.35f, 0f));
+        Fill(flash.rectTransform);
+        HitFlash hf = flash.gameObject.AddComponent<HitFlash>();
+        hf.flash = flash;
+
+        // health bar: a filled Image on a dark track
+        RectTransform hud = NewRect("HealthBar", p);
+        Corner(hud, true, 60f, 70f, 470f, 100f);
+        Image track = NewImage("Track", hud, "pill_b64", new Color(0.06f, 0.07f, 0.19f, 0.8f), true); Fill(track.rectTransform);
+        Image heart = NewImage("Icon", hud, "icon_heart", Palette.Red);
+        Mid(heart.rectTransform, -190f, 0f, 60f, 60f);
+        Image fill = NewImage("Fill", hud, "bar_8x1", Palette.Green);
+        Mid(fill.rectTransform, 25f, 0f, 300f, 30f);
+        fill.type = Image.Type.Filled;
+        fill.fillMethod = Image.FillMethod.Horizontal;
+        fill.fillAmount = 1f;
+        TMP_Text hp = NewText("Value", hud, "3/3", 36, Palette.Text, Art.Bold);
+        Mid(hp.rectTransform, 195f, 0f, 100f, 60f);
+        HealthBarListener hbl = hud.gameObject.AddComponent<HealthBarListener>();
+        hbl.fill = fill;
+        hbl.label = hp;
+
+        // coin counter
+        RectTransform coin = NewRect("CoinCounter", p);
+        Corner(coin, true, 60f, 190f, 250f, 90f);
+        Image cface = NewImage("Face", coin, "pill_b64", new Color(0.06f, 0.07f, 0.19f, 0.8f), true); Fill(cface.rectTransform);
+        Image cicon = NewImage("Icon", coin, "icon_coin", Palette.Gold);
+        Mid(cicon.rectTransform, -75f, 0f, 56f, 56f);
+        TMP_Text ctext = NewText("Value", coin, "0/8", 40, Palette.Text, Art.Bold);
+        Mid(ctext.rectTransform, 35f, 0f, 130f, 60f);
+        coin.gameObject.AddComponent<CoinCounter>().label = ctext;
+
+        TMP_Text level = NewText("Level", p, "LEVEL 1", 44, Palette.Muted, Art.Bold);
+        Top(level.rectTransform, 0f, 330f, 500f, 60f);
         levelLabels.Add(level);
 
-        RectTransform area = Card(p, "GameArea", Palette.BgMid);
-        Mid(area, 0f, 150f, 900f, 700f);
-        Image frame = NewImage("Frame", area, "rrect_outline_b44", Palette.Stroke, true); Fill(frame.rectTransform);
-        TMP_Text note = NewText("Note", area, "THE GAME PLAYS HERE", 56, Palette.Text, Art.Display);
-        Mid(note.rectTransform, 0f, 40f, 800f, 120f);
-        TMP_Text note2 = NewText("Note2", area, "Use the buttons below to finish the level", 36, Palette.Muted, Art.Body);
-        Mid(note2.rectTransform, 0f, -50f, 800f, 60f);
-
-        Button win = MakeButton(p, "WinButton", 760f, 140f, Palette.Accent, "FINISH LEVEL", 52, Palette.BgDeep, "icon_trophy", Art.Display);
-        Bottom(RT(win), 0f, 560f, 760f, 140f);
-        Call(win, ui.Win);
-        Button lose = MakeButton(p, "LoseButton", 760f, 130f, Palette.PanelHi, "FAIL LEVEL", 44, Palette.Text, "icon_heart", Art.Bold);
-        Bottom(RT(lose), 0f, 400f, 760f, 130f);
-        Call(lose, ui.Lose);
         Button pause = MakeButton(p, "PauseButton", 132f, 132f, Palette.PanelHi, null, 0, Palette.Text, "icon_pause", Art.Bold, "circle");
-        Bottom(RT(pause), 0f, 200f, 132f, 132f);
+        Corner(RT(pause), false, 60f, 70f, 132f, 132f);
+        pause.GetComponent<ButtonPress>().pressSound = UISound.None;     // UIManager plays the pause sound
         Call(pause, ui.Pause);
         return p.gameObject;
     }
@@ -428,11 +531,13 @@ public static class MenuBuilder
 
         Button resume = MakeButton(card, "ResumeButton", 700f, 180f, Palette.Accent, "RESUME", 80, Palette.BgDeep, "icon_play", Art.Display);
         Top(RT(resume), 0f, 410f, 700f, 180f);
+        resume.GetComponent<ButtonPress>().pressSound = UISound.None;    // UIManager plays the resume sound
         Call(resume, ui.Resume);
         // Fitts's law: Quit is far from Resume and red
         Button quit = MakeButton(card, "QuitButton", 700f, 130f, Palette.Red, "QUIT TO MENU", 44, Palette.BgDeep, "icon_home", Art.Bold);
         Top(RT(quit), 0f, 620f, 700f, 130f);
-        Go(quit, 1);
+        quit.GetComponent<ButtonPress>().pressSound = UISound.None;      // QuitToMenu plays the close sound
+        Call(quit, ui.QuitToMenu);
         return p.gameObject;
     }
 
@@ -462,13 +567,14 @@ public static class MenuBuilder
 
         Button next = MakeButton(card, "NextButton", 780f, 160f, Palette.Accent, "NEXT LEVEL", 66, Palette.BgDeep, "icon_next", Art.Display);
         Top(RT(next), 0f, 840f, 780f, 160f);
-        Go(next, 3);
+        Call(next, ui.NextLevel);
         Button retry = MakeButton(card, "RetryButton", 780f, 130f, Palette.PanelHi, "RETRY", 46, Palette.Text, "icon_restart", Art.Bold);
         Top(RT(retry), 0f, 1020f, 780f, 130f);
-        Go(retry, 4);
+        Call(retry, ui.Retry);
         Button menu = MakeButton(card, "MenuButton", 780f, 130f, Palette.PanelHi, "MENU", 46, Palette.Text, "icon_home", Art.Bold);
         Top(RT(menu), 0f, 1170f, 780f, 130f);
-        Go(menu, 1);
+        menu.GetComponent<ButtonPress>().pressSound = UISound.None;
+        Call(menu, ui.QuitToMenu);
 
         ui.resultTitle = title;
         ui.resultBanner = banner;
@@ -530,41 +636,31 @@ public static class MenuBuilder
         return t;
     }
 
-    static RectTransform SettingRow(Transform parent, string name, string icon, string label, float y, float h)
+    static RectTransform SettingRow(Transform parent, string name, string icon, string label, float y, float h, bool sliderRow)
     {
         RectTransform row = Card(parent, name, Palette.Panel);
         Top(row, 0f, y, 880f, h);
-        float top = h / 2f - 80f;
+        float top = sliderRow ? h / 2f - 58f : 0f;         // slider rows: label on top, slider underneath
         Image badge = NewImage("Badge", row, "circle", Palette.BgDeep);
-        Mid(badge.rectTransform, -355f, h > 200f ? top : 0f, 96f, 96f);
+        Mid(badge.rectTransform, -355f, top, 90f, 90f);
         Image ic = NewImage("Icon", row, icon, Palette.Muted);
-        Mid(ic.rectTransform, -355f, h > 200f ? top : 0f, 54f, 54f);
+        Mid(ic.rectTransform, -355f, top, 50f, 50f);
         TMP_Text t = NewText("Label", row, label, 46, Palette.Text, Art.Bold);
         t.alignment = TextAlignmentOptions.Left;
-        Mid(t.rectTransform, -90f, h > 200f ? top : 0f, 440f, 64f);
+        Mid(t.rectTransform, -90f, top, 440f, 64f);
         return row;
     }
 
-    static GameObject BuildSettings(Transform parent)
+    // a slider row: icon + label + percentage on top, the slider underneath
+    static Slider MakeSlider(RectTransform row, float min, float max, float value, out TMP_Text valueText)
     {
-        RectTransform p = Panel(parent, "Screen_09_Settings");
-        Header(p, "SETTINGS", 1);
+        valueText = NewText("Value", row, "100%", 46, Palette.Accent, Art.Bold);
+        valueText.alignment = TextAlignmentOptions.Right;
+        float h = row.sizeDelta.y;
+        Mid(valueText.rectTransform, 290f, h / 2f - 58f, 200f, 64f);
 
-        RectTransform r1 = SettingRow(p, "VibrationRow", "icon_vibrate", "Vibration", 420f, 160f);
-        Toggle vib = MakeToggle(r1, 330f, 0f);
-        UnityEventTools.AddPersistentListener<bool>(vib.onValueChanged, settings.SetVibrate);
-        RectTransform r2 = SettingRow(p, "TipsRow", "icon_info", "Show tips", 610f, 160f);
-        Toggle tips = MakeToggle(r2, 330f, 0f);
-        UnityEventTools.AddPersistentListener<bool>(tips.onValueChanged, settings.SetTips);
-
-        RectTransform r3 = SettingRow(p, "BrightnessRow", "icon_clock", "Brightness", 870f, 250f);
-        TMP_Text value = NewText("Value", r3, "100%", 46, Palette.Accent, Art.Bold);
-        value.alignment = TextAlignmentOptions.Right;
-        Mid(value.rectTransform, 290f, 55f, 200f, 64f);
-        settings.brightnessLabel = value;
-
-        RectTransform sl = NewRect("Slider", r3);
-        Mid(sl, 0f, -52f, 760f, 80f);
+        RectTransform sl = NewRect("Slider", row);
+        Mid(sl, 0f, -38f, 760f, 80f);
         Image track = NewImage("Background", sl, "pill_b64", Palette.BgDeep, true, true);
         track.rectTransform.anchorMin = new Vector2(0f, 0.5f);
         track.rectTransform.anchorMax = new Vector2(1f, 0.5f);
@@ -590,10 +686,50 @@ public static class MenuBuilder
         slider.fillRect = fill.rectTransform;
         slider.handleRect = handle.rectTransform;
         slider.targetGraphic = handle;
-        slider.minValue = 0.5f;
-        slider.maxValue = 1f;
-        slider.value = 1f;
-        UnityEventTools.AddPersistentListener<float>(slider.onValueChanged, settings.SetBrightness);
+        slider.minValue = min;
+        slider.maxValue = max;
+        slider.value = value;
+        return slider;
+    }
+
+    static void VolumeRow(Transform p, string name, string icon, string label, float y, string parameter, AudioClip sample)
+    {
+        RectTransform row = SettingRow(p, name, icon, label, y, 200f, true);
+        TMP_Text value;
+        Slider s = MakeSlider(row, 0.0001f, 1f, VolumeSettings.DefaultFor(parameter), out value);   // 0.0001, never 0: log10(0) is minus infinity
+        VolumeSlider vs = s.gameObject.AddComponent<VolumeSlider>();
+        vs.parameter = parameter;
+        vs.valueLabel = value;
+        vs.sfxSample = sample;
+    }
+
+    static GameObject BuildSettings(Transform parent)
+    {
+        RectTransform p = Panel(parent, "Screen_09_Settings");
+        Header(p, "SETTINGS", 1);
+
+        RectTransform r1 = SettingRow(p, "VibrationRow", "icon_vibrate", "Vibration", 330f, 120f, false);
+        Toggle vib = MakeToggle(r1, 330f, 0f);
+        UnityEventTools.AddPersistentListener<bool>(vib.onValueChanged, settings.SetVibrate);
+        RectTransform r2 = SettingRow(p, "TipsRow", "icon_info", "Show tips", 470f, 120f, false);
+        Toggle tips = MakeToggle(r2, 330f, 0f);
+        UnityEventTools.AddPersistentListener<bool>(tips.onValueChanged, settings.SetTips);
+        RectTransform r3 = SettingRow(p, "MuteRow", "icon_sound_off", "Mute all", 610f, 120f, false);
+        Toggle mute = MakeToggle(r3, 330f, 0f);
+        mute.isOn = false;
+        UnityEventTools.AddPersistentListener<bool>(mute.onValueChanged, volume.SetMuted);
+        volume.muteToggle = mute;
+
+        RectTransform r4 = SettingRow(p, "BrightnessRow", "icon_clock", "Brightness", 790f, 200f, true);
+        TMP_Text value;
+        Slider bright = MakeSlider(r4, 0.5f, 1f, 1f, out value);
+        settings.brightnessLabel = value;
+        UnityEventTools.AddPersistentListener<float>(bright.onValueChanged, settings.SetBrightness);
+
+        VolumeRow(p, "MasterRow", "icon_sound", "Master", 1010f, VolumeSettings.Master, null);
+        VolumeRow(p, "MusicRow", "icon_music", "Music", 1230f, VolumeSettings.Music, null);
+        VolumeRow(p, "SfxRow", "icon_star", "Effects", 1450f, VolumeSettings.Sfx, Clip("SFX/sfx_coin.wav"));
+        VolumeRow(p, "UiRow", "icon_bolt", "Interface", 1670f, VolumeSettings.Ui, null);
         return p.gameObject;
     }
 
@@ -605,14 +741,58 @@ public static class MenuBuilder
         string gold = "<color=#FFE680>";
         string text =
             gold + "DESIGN AND CODE</color>\nMuhammad Sarmad Ahmad\nBSSE23013, Information Technology University\n\n" +
-            gold + "COURSE</color>\nCS464 Game Development\nLecture 08: UI and UX in Games\n\n" +
+            gold + "COURSE</color>\nCS464 Game Development\nLectures 08, 09 and 10\n\n" +
+            gold + "MUSIC AND SOUNDS</color>\nMade by the author with Python and NumPy\n(Tools/make_audio.py). No third-party audio.\n\n" +
             gold + "FONTS</color>\nLilita One and Poppins (SIL Open Font License)\n\n" +
-            gold + "ART</color>\nIcons and shapes drawn by the author with Python (Pillow)\n\n" +
-            gold + "REFERENCES</color>\nFagerholt and Lorentzon, 2009\nWCAG 2 contrast guidelines\nFitts's law, 60-30-10 colour rule";
-        TMP_Text t = NewText("Text", p, text, 38, Palette.Text, Art.Body, true);
+            gold + "ART</color>\nIcons and shapes drawn by the author with Python (Pillow)";
+        TMP_Text t = NewText("Text", p, text, 36, Palette.Text, Art.Body, true);
         t.richText = true;
         t.lineSpacing = 12f;
         Top(t.rectTransform, 0f, 900f, 900f, 1200f);
+        return p.gameObject;
+    }
+
+    // ------------------------------------------------------------ 11 Loading
+    static GameObject BuildLoading(Transform parent)
+    {
+        RectTransform p = Panel(parent, "Screen_11_Loading");
+        TMP_Text title = NewText("Title", p, "LOADING", 110, Palette.Text, Art.Display);
+        Top(title.rectTransform, 0f, 620f, 900f, 150f);
+        Image ball = NewImage("Ball", p, "ball", Hex3(0x3CCFC4));
+        Mid(ball.rectTransform, 0f, 180f, 260f, 260f);
+        ball.gameObject.AddComponent<Pulse>();
+
+        RectTransform bar = NewRect("Bar", p);
+        Mid(bar, 0f, -150f, 800f, 44f);
+        Image track = NewImage("Track", bar, "pill_b64", Palette.BgDeep, true); Fill(track.rectTransform);
+        Image outline = NewImage("Outline", bar, "pill_outline_b64", Palette.Stroke, true); Fill(outline.rectTransform);
+        Image fill = NewImage("Fill", bar, "bar_8x1", Palette.Accent);
+        Fill(fill.rectTransform, 10f, 10f);
+        fill.rectTransform.offsetMin = new Vector2(10f, 8f);
+        fill.rectTransform.offsetMax = new Vector2(-10f, -8f);
+        fill.type = Image.Type.Filled;
+        fill.fillMethod = Image.FillMethod.Horizontal;
+        fill.fillAmount = 0f;
+
+        TMP_Text percent = NewText("Percent", p, "0%", 70, Palette.Accent, Art.Display);
+        Mid(percent.rectTransform, 0f, -270f, 500f, 100f);
+        TMP_Text tip = NewText("Tip", p, "", 38, Palette.Muted, Art.Body, true);
+        Bottom(tip.rectTransform, 0f, 300f, 860f, 140f);
+        TMP_Text lvl = NewText("Level", p, "LEVEL 1", 44, Palette.Muted, Art.Bold);
+        Top(lvl.rectTransform, 0f, 780f, 700f, 60f);
+        levelLabels.Add(lvl);
+
+        loader.barFill = fill;
+        loader.percentText = percent;
+        loader.tipText = tip;
+        loader.tips = new string[]
+        {
+            "Tip: collect every coin to clear the level",
+            "Tip: the blue bolt gives you a speed boost",
+            "Tip: a heart gives back one life",
+            "Tip: after a hit you are safe for a second",
+            "Tip: press Esc or the pause button to pause"
+        };
         return p.gameObject;
     }
 }

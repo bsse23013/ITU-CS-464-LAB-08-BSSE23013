@@ -20,12 +20,13 @@ public class Shop : MonoBehaviour
 
     public void Buy(int i)
     {
-        if (owned[i]) { message.text = "You already own this"; return; }
-        if (coins < prices[i]) { message.text = "Not enough coins"; return; }
+        if (owned[i]) { message.text = "You already own this"; UIAudio.Play(UISound.Error); return; }
+        if (coins < prices[i]) { message.text = "Not enough coins"; UIAudio.Play(UISound.Error); return; }
         coins -= prices[i];
         owned[i] = true;
         buyLabels[i].text = "OWNED";
         message.text = "Bought!";
+        UIAudio.Play(UISound.Success);
         ShowCoins();
     }
 

@@ -7,6 +7,7 @@ using UnityEngine.SceneManagement;
 using UnityEngine.TextCore.LowLevel;
 
 // Menu item  Lab07 > Build Menu Scene : builds the Canvas and saves Assets/Scenes/MenuSystem.unity
+// (Lab 08: also adds the AudioListener and the Audio object. Build the audio mixer and the Gameplay scene first, or use Lab08 > Build Everything.)
 public static class Lab07Menu
 {
     const string ScenePath = "Assets/Scenes/MenuSystem.unity";
@@ -28,12 +29,17 @@ public static class Lab07Menu
         Camera cam = camGo.AddComponent<Camera>();
         cam.clearFlags = CameraClearFlags.SolidColor;
         cam.backgroundColor = Palette.BgDeep;
+        camGo.AddComponent<AudioListener>();      // the one listener for the whole game (Lab 08)
 
         MenuBuilder.Build();
 
         Directory.CreateDirectory("Assets/Scenes");
         EditorSceneManager.SaveScene(scene, ScenePath);
-        EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
+        EditorBuildSettings.scenes = new[]
+        {
+            new EditorBuildSettingsScene(ScenePath, true),
+            new EditorBuildSettingsScene("Assets/Scenes/Gameplay.unity", true)
+        };
         Debug.Log("[Lab07] Menu scene saved to " + ScenePath);
     }
 
